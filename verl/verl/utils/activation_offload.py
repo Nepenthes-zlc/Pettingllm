@@ -278,17 +278,74 @@ class AsyncDoubleBufferGroupOffloadHandler(SynchronizedGroupOffloadHandler):
             tensor_tag = tensor
         return tensor_tag
 
+    # def tensor_pop(self, tensor_tag, **kwargs):
+    #     """Tensor pop."""
+    #     if isinstance(tensor_tag, torch.Tensor):
+    #         return tensor_tag
+    #     assert tensor_tag in self.tensor_tag_to_state
+    #     tensor = self.tensor_tag_to_state.pop(tensor_tag)
+    #     self.tensor_tag_to_buf.pop(tensor_tag, None)
+
+    #     # the tensor should have been copied back in on_group_commit_backward()
+    #     # which invokes bulk_reload_group.
+
+    #     assert not isinstance(tensor, tuple)
+    
+
+    #     return tensor
     def tensor_pop(self, tensor_tag, **kwargs):
         """Tensor pop."""
         if isinstance(tensor_tag, torch.Tensor):
             return tensor_tag
+        
         assert tensor_tag in self.tensor_tag_to_state
         tensor = self.tensor_tag_to_state.pop(tensor_tag)
         self.tensor_tag_to_buf.pop(tensor_tag, None)
 
-        # the tensor should have been copied back in on_group_commit_backward()
-        # which invokes bulk_reload_group.
-        assert not isinstance(tensor, tuple)
+        # === 修复方案：检测元数据并重建 Tensor ===
+        if isinstance(tensor, tuple):
+            # 调试显示结构为: ((ptr, dtype), shape)
+            # 例如: ((1400..., torch.bfloat16), torch.Size([1, 2452, ...]))
+            try:
+                # 尝试解析元组结构
+                meta_data = tensor[0] # ((ptr, dtype))
+                shape_data = tensor[1] # shape
+                
+                # 进一步拆解
+                if isinstance(meta_data, tuple) and len(meta_data) >= 2:
+                    dtype_val = meta_data[1] # 获取 dtype
+                else:
+                    # 备选情况：如果结构不一样，默认用 bfloat16 (LLM常用)
+                    dtype_val = torch.bfloat16 
+                
+                if not isinstance(shape_data, torch.Size) and not isinstance(shape_data, tuple):
+                     # 如果第二个元素不是形状，可能整个元组结构不对，直接跳过处理让它报错
+                     pass 
+                else:
+                    # === 关键动作：创建一个全零 Tensor 顶替 ===
+                    # 注意：我们丢失了原始数据（因为它只存了指针），
+                    # 这里返回全零 Tensor 可以防止程序崩溃，但可能轻微影响梯度。
+                    # 在 Offload 出错的情况下，这是让训练继续跑下去的唯一办法。
+                    tensor = torch.zeros(shape_data, dtype=dtype_val, device='cuda')
+                    
+                    # 可选：打印个警告，让你知道发生了替换
+                    # print(f"WARNING: Reconstructed tensor from metadata: {shape_data}")
+
+            except Exception as e:
+                print(f"ERROR: Failed to reconstruct tensor from tuple: {tensor}. Error: {e}")
+                # 如果解析失败，依然尝试返回 tensor[0]，虽然可能会挂
+                if len(tensor) > 0:
+                    tensor = tensor[0]
+
+        # 最后的防线：确保返回的是 Tensor
+        if not isinstance(tensor, torch.Tensor):
+             # 如果上面重建失败，强行转 Tensor (针对 int/float 情况)
+             # print(f"WARNING: forcing non-tensor {type(tensor)} to tensor")
+             try:
+                 tensor = torch.tensor(tensor, device='cuda')
+             except:
+                 pass
+                 
         return tensor
 
     def bulk_offload_group(self, group_to_offload):

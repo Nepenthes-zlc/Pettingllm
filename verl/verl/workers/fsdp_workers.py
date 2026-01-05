@@ -253,7 +253,7 @@ class ActorRolloutRefWorker(Worker):
                 config=actor_model_config,
                 trust_remote_code=trust_remote_code,
             )
-
+            actor_module.to(torch.bfloat16)
             # Apply Liger kernel to the model if use_liger is set to True
             if use_liger:
                 from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
@@ -268,7 +268,8 @@ class ActorRolloutRefWorker(Worker):
             )
 
             # some parameters may not in torch_dtype. TODO(zhangchi.usc1992) remove this after we switch to fsdp2
-            actor_module.to(torch_dtype)
+            # actor_module.to(torch_dtype)
+            actor_module.to(torch.bfloat16)
 
             if enable_gradient_checkpointing:
                 actor_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -290,6 +291,29 @@ class ActorRolloutRefWorker(Worker):
             print_model_size(actor_module)
 
         log_gpu_memory_usage(f"After init {role} from HF AutoModel", logger=logger)
+
+        # ================= [强制修复 Qwen-VL FSDP 报错] 开始 =================
+        # Qwen-VL 的视觉部分极其顽固，必须暴力循环修改 param.data
+        if self.rank == 0:
+            print(f"DEBUG: [Force Fix] Scanning and converting all parameters to bfloat16 for {role}...")
+        
+        count_fixed = 0
+        for name, param in actor_module.named_parameters():
+            if param.dtype != torch.bfloat16:
+                # 直接修改 data 指针，这是最底层的修改方式
+                param.data = param.data.to(torch.bfloat16)
+                if param.grad is not None:
+                    param.grad.data = param.grad.data.to(torch.bfloat16)
+                count_fixed += 1
+        
+        # 同时也处理 buffer (例如 Vision Tower 的位置编码)
+        for name, buffer in actor_module.named_buffers():
+            if buffer.dtype != torch.bfloat16 and buffer.dtype.is_floating_point:
+                buffer.data = buffer.data.to(torch.bfloat16)
+
+        if self.rank == 0 and count_fixed > 0:
+            print(f"DEBUG: [Force Fix] Successfully forced {count_fixed} non-compliant parameters to bfloat16.")
+        # ================= [强制修复 Qwen-VL FSDP 报错] 结束 =================
 
         # We wrap FSDP for rollout as well
         mixed_precision_config = fsdp_config.get("mixed_precision", None)
@@ -605,8 +629,11 @@ class ActorRolloutRefWorker(Worker):
 
             # get the original unwrapped module
             if fsdp_version(self.actor_module_fsdp) == 1:
-                self.actor_module = self.actor_module_fsdp._fsdp_wrapped_module
-
+                # self.actor_module = self.actor_module_fsdp._fsdp_wrapped_module
+                # 如果取不到 _fsdp_wrapped_module，就直接用 actor_module_fsdp 本身
+                self.actor_module = getattr(self.actor_module_fsdp, "_fsdp_wrapped_module", self.actor_module_fsdp)
+            else:
+                self.actor_module = self.actor_module_fsdp
             if self._is_offload_param:
                 offload_fsdp_model_to_cpu(self.actor_module_fsdp)
                 log_gpu_memory_usage("After offload actor model during init", logger=logger)
@@ -644,7 +671,10 @@ class ActorRolloutRefWorker(Worker):
 
                                 # Add new adapter with same config as default
                                 self.actor_module.add_adapter(adapter_name, base_lora_config)
-
+                                # ================= [新增修复：强制 LoRA 上 GPU] =================
+                                # 新创建的 Adapter 默认在 CPU，必须手动转到当前 GPU
+                                self.actor_module.to(get_torch_device().current_device())
+                                # ==========================================================
                         # Remove the default adapter since we're using lora_1, lora_2, ...
                         if "default" in self.actor_module.peft_config and self.lora_num > 1:
                             # Set to lora_1 before deleting default
@@ -1382,7 +1412,7 @@ class CriticWorker(Worker):
                 config=critic_model_config,
                 trust_remote_code=config.model.get("trust_remote_code", False),
             )
-
+            critic_module.to(torch.bfloat16)
             use_remove_padding = config.model.get("use_remove_padding", False)
 
             apply_monkey_patch(
@@ -1392,7 +1422,9 @@ class CriticWorker(Worker):
             )
 
             # some parameters may not in torch_dtype
-            critic_module.to(torch_dtype)
+            # critic_module.to(torch_dtype)
+            critic_module.to(torch.bfloat16)
+
 
             if config.model.get("enable_gradient_checkpointing", False):
                 critic_module.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -1414,6 +1446,17 @@ class CriticWorker(Worker):
             print_model_size(critic_module)
 
         self.critic_model_config = critic_model_config
+
+        # ================= [强制修复 Critic FSDP 报错] 开始 =================
+        if self.rank == 0:
+            print(f"DEBUG: [Force Fix] Enforcing bfloat16 for Critic parameters...")
+        for name, param in critic_module.named_parameters():
+            if param.dtype != torch.bfloat16:
+                param.data = param.data.to(torch.bfloat16)
+                if param.grad is not None:
+                    param.grad.data = param.grad.data.to(torch.bfloat16)
+        # ================= [强制修复 Critic FSDP 报错] 结束 =================
+
 
         fsdp_config = self.config.model.fsdp_config
         mixed_precision_config = fsdp_config.get("mixed_precision", None)
@@ -1692,7 +1735,7 @@ class RewardModelWorker(Worker):
                 attn_implementation="flash_attention_2",
                 trust_remote_code=trust_remote_code,
             )
-
+            reward_module.to(torch.bfloat16)
             apply_monkey_patch(
                 model=reward_module,
                 use_remove_padding=config.model.get("use_remove_padding", False),
@@ -1700,7 +1743,11 @@ class RewardModelWorker(Worker):
             )
 
             reward_module.to(torch.bfloat16)
-
+        # ================= [强制修复 Reward FSDP 报错] 开始 =================
+        for name, param in reward_module.named_parameters():
+            if param.dtype != torch.bfloat16:
+                param.data = param.data.to(torch.bfloat16)
+        # ================= [强制修复 Reward FSDP 报错] 结束 =================
         auto_wrap_policy = get_fsdp_wrap_policy(module=reward_module, config=self.config.model.fsdp_config)
 
         fsdp_mesh = self.device_mesh

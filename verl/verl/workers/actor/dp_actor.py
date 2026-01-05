@@ -57,6 +57,14 @@ class DataParallelPPOActor(BasePPOActor):
         """When optimizer is None, it is Reference Policy"""
         super().__init__(config)
         self.actor_module = actor_module
+
+        # =======================================================
+        # 🔴【新增代码】强制将模型转为 bfloat16，解决 FSDP 报错
+        # =======================================================
+        import torch
+        self.actor_module.to(torch.bfloat16) 
+        # =======================================================
+
         self.actor_optimizer = actor_optimizer
 
         self.use_remove_padding = self.config.get("use_remove_padding", False)

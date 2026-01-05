@@ -9,13 +9,14 @@ resource:
   n_gpus_per_node: 8
   trust_remote_code: true
 env:
-  name: stateful_env
+  name: stateful_vision_env
   dataset: polaris
   benchmark: plan_path
   max_turns: 5
   resolve: false
-  multi_modal: false
+  multi_modal: true
   batched_init: true
+  image_save_dir: tmp_image
 base_models:
   policy_0:
     path: your base model path
@@ -23,11 +24,11 @@ base_models:
 agent_policy_configs:
   agent_configs:
     agent_0:
-      name: plan_agent
+      name: plan_agent_vision
       policy_name: shared_model
       train_llm_config:
         enable_thinking: false
-        temperature: 1.0
+        temperature: 0.2
         top_p: 0.9
         top_k: 20
         min_p: 0.0
@@ -38,11 +39,11 @@ agent_policy_configs:
         top_k: 20
         min_p: 0.0
     agent_1:
-      name: tool_call_agent
+      name: tool_call_agent_vision
       policy_name: shared_model
       train_llm_config:
         enable_thinking: false
-        temperature: 1.0
+        temperature: 1.5
         top_p: 0.9
         top_k: 20
         min_p: 0.0
@@ -54,8 +55,8 @@ agent_policy_configs:
         min_p: 0.0
 multi_agent_interaction:
   turn_order:
-  - tool_call_agent
-  - plan_agent
+  - tool_call_agent_vision
+  - plan_agent_vision
 training:
   device: cuda
   total_training_steps: 200
@@ -75,6 +76,8 @@ training:
   max_response_length: 2048
   lora_rank: ${lora_rank}
   lora_alpha: ${lora_alpha}
+  enable_multimodal: true
+  max_image_steps: 20
 models:
   model_0:
     path: ${base_models.policy_0.path}

@@ -194,8 +194,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
                 torch.save(extra_state_dict, extra_path)
 
         if self.rank == 0:
-            if fsdp_version(self.model) == 1:
-                unwrap_model = self.model._fsdp_wrapped_module
+            if fsdp_version(self.model) == 1:   
+                # unwrap_model = self.model._fsdp_wrapped_module
+                unwrap_model = getattr(self.model, "_fsdp_wrapped_module", self.model)
             else:
                 unwrap_model = self.model
 

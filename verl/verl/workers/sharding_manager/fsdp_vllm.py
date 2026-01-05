@@ -130,7 +130,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         def __collect_lora_params(adapter_name: str = None)->OrderedDict:
             """
             collect lora params or full params if base model is not ready in vllm
-            work with if isinstance(self.module._fsdp_wrapped_module, PeftModel)
+            work with if isinstance(getattr(self.module, "_fsdp_wrapped_module", self.module), PeftModel)
             
             Args:
                 adapter_name: The name of the adapter to collect. If None, uses the active adapter.
@@ -148,11 +148,11 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                     with FSDP.summon_full_params(self.module, writeback=False):
                         if self.base_sync_done:
                             # Pass adapter_name to get_peft_model_state_dict to avoid 'default' KeyError
-                            lora_params = get_peft_model_state_dict(self.module._fsdp_wrapped_module, adapter_name=adapter_name)
+                            lora_params = get_peft_model_state_dict(getattr(self.module, "_fsdp_wrapped_module", self.module), adapter_name=adapter_name)
                             lora_params = {name: param.full_tensor().detach().cpu() if hasattr(param, 'full_tensor') else param.detach().cpu() 
                                         for name, param in lora_params.items()}
                         else:
-                            model = self.module._fsdp_wrapped_module.base_model.model
+                            model = getattr(self.module, "_fsdp_wrapped_module", self.module).base_model.model
                             orig_dev = 'cpu' if 'cpu' in next(model.parameters()).device else 'cuda'
                             model = model.to('cpu')
                             for name, param in model.state_dict().items():
@@ -165,9 +165,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             else:
                 if self.base_sync_done:
                     # Pass adapter_name to get_peft_model_state_dict to avoid 'default' KeyError
-                    lora_params = get_peft_model_state_dict(self.module._fsdp_wrapped_module, adapter_name=adapter_name)
+                    lora_params = get_peft_model_state_dict(getattr(self.module, "_fsdp_wrapped_module", self.module), adapter_name=adapter_name)
                 else:
-                    model = self.module._fsdp_wrapped_module.base_model.model
+                    model = getattr(self.module, "_fsdp_wrapped_module", self.module).base_model.model
                     orig_dev = 'cpu' if 'cpu' in next(model.parameters()).device else 'cuda'
                     model = model.to('cpu')
                     for name, param in model.state_dict().items():
@@ -198,9 +198,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         # Store all LoRA adapters info for multi-LoRA mode
         all_lora_adapters = []
         
-        if isinstance(self.module._fsdp_wrapped_module, PeftModel):
+        if isinstance(getattr(self.module, "_fsdp_wrapped_module", self.module), PeftModel):
             # Get all available adapters
-            available_adapters = list(self.module._fsdp_wrapped_module.peft_config.keys())
+            available_adapters = list(getattr(self.module, "_fsdp_wrapped_module", self.module).peft_config.keys())
             
             # Check if this is multi-LoRA mode based on configuration
             # Priority: explicit multi_lora flag > auto-detection from adapters
@@ -221,16 +221,16 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 print(f"Multi-LoRA mode detected. Available adapters: {available_adapters}")
                 
                 # Get the current active adapter to restore later
-                original_active_adapter = self.module._fsdp_wrapped_module.active_adapter
+                original_active_adapter = getattr(self.module, "_fsdp_wrapped_module", self.module).active_adapter
                 print(f"The current active adapter: {original_active_adapter}")
                 # Collect parameters for all adapters
                 for adapter_name in available_adapters:
                     if adapter_name.startswith('lora_'):
                         lora_id = int(adapter_name.split('_')[-1])
-                        peft_config = self.module._fsdp_wrapped_module.peft_config.get(adapter_name)
+                        peft_config = getattr(self.module, "_fsdp_wrapped_module", self.module).peft_config.get(adapter_name)
                         
                         # Switch to this adapter to collect its parameters
-                        self.module._fsdp_wrapped_module.set_adapter(adapter_name)
+                        getattr(self.module, "_fsdp_wrapped_module", self.module).set_adapter(adapter_name)
                         params = __collect_lora_params(adapter_name=adapter_name)
                         
                         all_lora_adapters.append({
@@ -243,10 +243,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 
                 # Restore the original active adapter
                 if original_active_adapter in available_adapters:
-                    self.module._fsdp_wrapped_module.set_adapter(original_active_adapter)
+                    getattr(self.module, "_fsdp_wrapped_module", self.module).set_adapter(original_active_adapter)
                 else:
                     # If original was default, switch to lora_1
-                    self.module._fsdp_wrapped_module.set_adapter('lora_1')
+                    getattr(self.module, "_fsdp_wrapped_module", self.module).set_adapter('lora_1')
                 
                 # For single update_params call, use the first adapter (will be updated in loop later)
                 adapter_name = all_lora_adapters[0]['adapter_name']
@@ -256,11 +256,11 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                 
             else:
                 # Single LoRA mode or default adapter exists
-                active_adapter = self.module._fsdp_wrapped_module.active_adapter
+                active_adapter = getattr(self.module, "_fsdp_wrapped_module", self.module).active_adapter
                 
                 if 'default' in available_adapters:
                     # Use default adapter
-                    peft_config = self.module._fsdp_wrapped_module.peft_config.get('default', None)
+                    peft_config = getattr(self.module, "_fsdp_wrapped_module", self.module).peft_config.get('default', None)
                     adapter_name = 'default'
                     lora_id = None
                 elif available_adapters:
@@ -270,7 +270,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
                         lora_id = int(adapter_name.split('_')[-1])
                     else:
                         lora_id = None
-                    peft_config = self.module._fsdp_wrapped_module.peft_config.get(adapter_name)
+                    peft_config = getattr(self.module, "_fsdp_wrapped_module", self.module).peft_config.get(adapter_name)
                     logger.warning(f"No 'default' adapter found. Using adapter: '{adapter_name}'")
                 else:
                     raise ValueError("No LoRA adapters found in peft_config")

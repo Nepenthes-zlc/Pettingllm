@@ -12,13 +12,13 @@ export HYDRA_FULL_ERROR=1
 export NCCL_IB_DISABLE=1
 export NCCL_NET_GDR_LEVEL=0
 export WANDB_MODE=offline
-export VLLM_LOGGING_LEVEL=WARNING
+
 
 export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
 export LD_LIBRARY_PATH=$CUDA_HOME/targets/x86_64-linux/lib:${LD_LIBRARY_PATH}
 
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:${LD_LIBRARY_PATH}
-
+# /mnt/shared-storage-user/luozhihao/envs/PettingLLMs
 
 GPU_num=4
 
@@ -27,36 +27,16 @@ model_0_config_path="models.model_0.ppo_trainer_config"
 model_0_resource="resource.n_gpus_per_node=$GPU_num  $model_0_config_path.trainer.n_gpus_per_node=$GPU_num $model_0_config_path.trainer.nnodes=1 $model_0_config_path.actor_rollout_ref.rollout.tensor_model_parallel_size=$GPU_num"
 
 
-python3 -m pettingllms.trainer.train --config-path ../config/stateful_vision --config-name stateful_L1_prompt \
+python3 -m pettingllms.trainer.train --config-path ../config/math --config-name math_L2_lora \
     $model_0_resource \
     base_models.policy_0.path="/mnt/shared-storage-user/steai-share/zhanglechao/Qwen2.5-VL-7B-Instruct"\
-    training.experiment_name=stateful_vision_L1_prompt\
+    training.experiment_name=math_qwen2.5_7b_vl\
     training.total_training_steps=200\
     training.train_batch_size=32\
     training.train_sample_num=8\
     training.validate_sample_num=5\
-    training.max_prompt_length=4096\
-    training.max_response_length=2048\
+    training.max_prompt_length=8192\
+    training.max_response_length=8192\
     training.val_freq=10\
     env.dataset=polaris\
-    env.benchmark=plan_path\
-    env.image_save_dir=tmp_image\
-    training.enable_multimodal=true\
-    training.max_image_steps=20\
-
-# python3 -m pettingllms.trainer.train --config-path ../config/stateful_vision --config-name stateful_L1_prompt \
-#     $model_0_resource \
-#     base_models.policy_0.path="/mnt/shared-storage-user/steai-share/zhanglechao/Qwen2.5-VL-7B-Instruct"\
-#     training.experiment_name=stateful_vision_L1_prompt\
-#     training.total_training_steps=200\
-#     training.train_batch_size=4\
-#     training.train_sample_num=2\
-#     training.validate_sample_num=2\
-#     training.max_prompt_length=4096\
-#     training.max_response_length=2048\
-#     training.val_freq=10\
-#     env.dataset=polaris\
-#     env.benchmark=plan_path\
-#     env.image_save_dir=tmp_image\
-#     training.enable_multimodal=true\
-#     training.max_image_steps=5\
+    env.benchmark=AIME24\

@@ -11,7 +11,10 @@ import logging
 os.environ['PYTHONUNBUFFERED'] = '1'
 sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
 sys.stderr.reconfigure(line_buffering=True) if hasattr(sys.stderr, 'reconfigure') else None
-
+try:
+    from ray._private.runtime_env import uv_runtime_env_hook
+    uv_runtime_env_hook._get_uv_run_cmdline = lambda: None
+except: pass
 import hydra
 import ray
 from omegaconf import OmegaConf, DictConfig
@@ -46,6 +49,32 @@ def run_ppo(config):
         cleanup_ray_runtime()
 
 def train_multi_agents(config):
+    # ================= 强力修复开始 =================
+    import flash_attn.flash_attn_interface
+    import logging
+    
+    # 1. 获取原生函数
+    _original_varlen = flash_attn.flash_attn_interface.flash_attn_varlen_func
+    
+    # 2. 定义包装器：拦截 Tuple，只返回 Tensor
+    def _patched_flash_attn_varlen_func(*args, **kwargs):
+        # 调用原生 CUDA 算子
+        output = _original_varlen(*args, **kwargs)
+        # 如果是 Tuple (output, lse, ...)，只取第一个 output
+        if isinstance(output, tuple):
+            return output[0]
+        return output
+    
+    # 3. 覆盖库函数 (Monkey Patch)
+    flash_attn.flash_attn_interface.flash_attn_varlen_func = _patched_flash_attn_varlen_func
+    
+    print("="*80)
+    print("[MonkeyPatch] Successfully applied Tuple-fix for FlashAttention!")
+    print("="*80)
+    # ================= 强力修复结束 =================
+
+
+
     from pprint import pprint
     from omegaconf import OmegaConf
     from verl.utils.fs import copy_local_path_from_hdfs

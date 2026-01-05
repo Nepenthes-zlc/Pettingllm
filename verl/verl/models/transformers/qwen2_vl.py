@@ -32,13 +32,35 @@ from verl.utils.ulysses import (
     validate_ulysses_config,
 )
 
-try:
-    from transformers.modeling_flash_attention_utils import flash_attn_func, flash_attn_varlen_func
+# try:
+#     from transformers.modeling_flash_attention_utils import flash_attn_func, flash_attn_varlen_func
 
-    _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
-except ImportError:
-    flash_attn_varlen_func = None
+#     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
+# except ImportError:
+#     flash_attn_varlen_func = None
+#     _flash_supports_window_size = False
+# ================= 修复开始 =================
+import flash_attn
+import inspect
+from flash_attn.flash_attn_interface import flash_attn_varlen_func as _raw_flash_attn_varlen_func
+from flash_attn.flash_attn_interface import flash_attn_func as _raw_flash_attn_func
 
+# 定义包装器：如果原生函数返回 Tuple，只取第一个元素（Output Tensor）
+def flash_attn_varlen_func(*args, **kwargs):
+    output = _raw_flash_attn_varlen_func(*args, **kwargs)
+    if isinstance(output, tuple):
+        return output[0]
+    return output
+
+def flash_attn_func(*args, **kwargs):
+    output = _raw_flash_attn_func(*args, **kwargs)
+    if isinstance(output, tuple):
+        return output[0]
+    return output
+
+# 保持原有逻辑所需的签名检查
+_flash_supports_window_size = "window_size" in list(inspect.signature(_raw_flash_attn_func).parameters)
+# ================= 修复结束 =================
 
 def get_rope_index(
     processor,
@@ -281,7 +303,8 @@ def ulysses_flash_attn_forward(
         dropout=dropout_rate,
         sliding_window=sliding_window,
         is_causal=self.is_causal,
-        use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        # use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        use_top_left_mask=getattr(self, "_flash_attn_uses_top_left_mask", False),
         position_ids=position_ids,  # important: pass position ids
     )  # (batch_size, seq_length, num_head / sp_size, head_size)
     if ulysses_sp_size > 1:

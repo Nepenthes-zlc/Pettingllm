@@ -668,6 +668,23 @@ class MultiAgentsPPOTrainer:
                     # Update trainers
                     for model_name, trainer in self.ppo_trainer_dict.items():
                         if model_name in gen_batch_output_per_policy:
+                            # === 插入的新代码 START ===
+                            # 打印出 batch_per_trainer 里目前所有的 Key
+                            print(f"📦 [调试 - 全局] batch_per_trainer 里的所有 Keys: {list(batch_per_trainer.keys())}")
+                            print(f"🔍 [调试 - 当前] 正在尝试获取 model_name: {model_name}")
+                            # === 插入的新代码 END ===
+                            # === 新增的调试代码 START ===
+                            current_batch = batch_per_trainer.get(model_name)
+                            if current_batch is None:
+                                print(f"🔴 [调试报警] Agent: {model_name} 的数据是 None！完全没有收集到数据！")
+                            elif current_batch.batch is None:
+                                print(f"🔴 [调试报警] Agent: {model_name} 的内部 batch 是 None！")
+                            else:
+                                # ✅ 加上 "is not None"
+                                batch_data = current_batch.batch
+                                data_len = len(batch_data.get('prompts', [])) if batch_data is not None else 0
+                                print(f"🟢 [调试信息] Agent: {model_name} 收集到的数据量: {data_len}")
+                            # === 新增的调试代码 END ===
                             result = update_single_trainer(model_name, batch_per_trainer[model_name], trainer)
                             
                             if result["status"] == "error":
